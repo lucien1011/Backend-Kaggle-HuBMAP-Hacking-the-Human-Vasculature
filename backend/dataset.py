@@ -36,7 +36,7 @@ class HuBMAPDataset(BaseDataset):
     def __init__(
             self, 
             image_map, 
-            annotations, 
+            annotations=None, 
             classes=None, 
             augmentation=None, 
             preprocessing=None,
@@ -52,50 +52,43 @@ class HuBMAPDataset(BaseDataset):
         self.augmentation = augmentation
         self.preprocessing = preprocessing
     
-    @staticmethod
-    def create_image_array(coord_list):
-        image_array = np.zeros((512, 512), dtype=int) 
-        x_coords, y_coords = zip(*coord_list)
-        image_array[np.array(x_coords), np.array(y_coords)] = 1
-        return image_array
-
-    @staticmethod
-    def combine_binary_arrays(arr_list):
-        stacked_arr = np.stack(arr_list)  # Stack the binary arrays along a new axis
-        result = np.any(stacked_arr, axis=0).astype(int)  # Check if any array has a 1 at each position
-        return result
-    
     def __getitem__(self, i):
         
         key = self.image_keys[i]
 
         image = cv2.imread(self.image_map[key])
         
-        if key in self.annotations:
-            masks = {cls: np.zeros((512,512), dtype=np.uint8) for cls in self.classes}
-            polygons = self.annotations[key]
-            for polygon in polygons:
-                annotation_type = polygon['type']
-                if annotation_type not in self.classes: continue
-                lines = np.array(polygon['coordinates'])
-                #print(lines.shape)
-                #lines = lines.reshape(-1, 1, 2)
-                #print(lines.shape)
-                cv2.fillPoly(masks[annotation_type], [lines], 1)
-            mask = np.stack([masks[cls] for cls in self.classes], axis=-1).astype('float')
-        else:
-            mask = np.zeros((512, 512, len(self.classes)), dtype=float)
+        if self.annotations:
+            if key in self.annotations:
+                masks = {cls: np.zeros((512,512), dtype=np.uint8) for cls in self.classes}
+                polygons = self.annotations[key]
+                for polygon in polygons:
+                    annotation_type = polygon['type']
+                    if annotation_type not in self.classes: continue
+                    lines = np.array(polygon['coordinates'])
+                    lines = lines.reshape(-1, 1, 2)
+                    cv2.fillPoly(masks[annotation_type], [lines], 1)
+                mask = np.stack([masks[cls] for cls in self.classes], axis=-1).astype('float')
+            else:
+                mask = np.zeros((512, 512, len(self.classes)), dtype=float)
         
         if self.augmentation:
             sample = self.augmentation(image=image, mask=mask)
             image, mask = sample['image'], sample['mask']
         
         if self.preprocessing:
-            sample = self.preprocessing(image=image, mask=mask)
-            image, mask = sample['image'], sample['mask']
-            
-        return key, image, mask
-        
+            if self.annotations:
+                sample = self.preprocessing(image=image, mask=mask)
+                image, mask = sample['image'], sample['mask']
+            else:
+                sample = self.preprocessing(image=image)
+                image = sample['image']
+ 
+        if self.annotations:
+            return key, image, mask
+        else:
+            return key, image
+ 
     def __len__(self):
         return len(self.image_keys)
 
