@@ -16,9 +16,8 @@ from backend.metric import iou
 from backend.utils.io import import_configuration
 from backend.utils.seed import seed_everything 
 
-def get_vessels(mask):
-    #mask = image.astype(bool)
-    label_img = label(mask)
+def get_vessels_from_mask(mask,background=0):
+    label_img = label(mask,background=0)
     regions = regionprops(label_img)
 
     # get items/vessels
@@ -29,7 +28,16 @@ def get_vessels(mask):
         zero[minr:maxr, minc:maxc] = 1
         label_item = (mask*zero).astype(bool)
         label_items.append(label_item)
-    return  label_items
+    return label_items
+
+def get_vessels_from_pred(pred,threshold=0.5):
+    mask = (pred > threshold).astype(int)
+    label_items = get_vessels_from_mask(mask)
+    final_items = []
+    for label_item in label_items:
+        if label_item.sum() < 1000: continue
+        final_items.append(label_item)
+    return final_items
 
 def compute_iou(labels, y_pred):
     """
@@ -116,7 +124,7 @@ def iou_map(truths, preds, verbose=1):
 
     return np.mean(prec)
 
-config_path = 'config.20230610_train_v01'
+config_path = 'config.20230613_train_v01'
 config = import_configuration(config_path)
 
 base_dir = config.base_dir
@@ -134,22 +142,20 @@ model = model_class(**model_args)
 preprocessing_fn = smp.encoders.get_preprocessing_fn(encoder, encoder_weights)
 image_map,annotations,golden_ids,silver_ids = prepare_image_map_annotation(base_dir)
 
-valid_image_keys = pickle.load(open(os.path.join(tag,'valid_image_map_{:s}.pkl'.format(version)),'rb'))
+valid_image_keys = pickle.load(open(os.path.join(tag,version+'/','valid_image_map.pkl'),'rb'))
 valid_image_map = {k:image_map[k] for k in valid_image_keys}
 dataset = HuBMAPDataset(valid_image_map,annotations,classes,preprocessing=get_preprocessing(preprocessing_fn))
-model.load_state_dict(torch.load(tag+'/best_model_{:s}.pth'.format(version),map_location=torch.device('cpu')))
+model.load_state_dict(torch.load(os.path.join(tag,version+'/','best_model.pth'),map_location=torch.device('cpu')))
 
-output_dir = os.path.join(tag,'display/')
-os.makedirs(output_dir,exist_ok=True)
 truths,preds = [],[]
 with torch.no_grad():
     for i in tqdm(range(len(dataset))):
         key,image,gt = dataset[i]
         if gt.sum() == 0: continue
         image = torch.tensor(image).reshape((1,*image.shape))
-        pr = (model(image) > pr_threshold).numpy()[0,0,:]
-        pr_instances = get_vessels(pr)
-        gt_instances = get_vessels(gt[0,:])
+        pr = model(image)[0,0,:].cpu().detach().numpy()
+        pr_instances = get_vessels_from_pred(pr,threshold=pr_threshold)
+        gt_instances = get_vessels_from_mask(gt[0,:])
         truths.append(gt_instances)
         preds.append(pr_instances)
 print(iou_map(truths,preds))
